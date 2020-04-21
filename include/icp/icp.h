@@ -45,6 +45,7 @@ class IterativeClosestPoint{
 
     ~IterativeClosestPoint() {};
 
+    //setters and getters
     void setInput(pcl::PointCloud<pcl::PointXYZ>::Ptr in){
 
         input_ = in;
@@ -90,16 +91,40 @@ class IterativeClosestPoint{
         indices = tgt_indices_;
     }
 
+    //utility functions
+    //TO-DO, add breifs and paramete discriptor for all
+
+    /** \brief Determine the coresspondence between the input and target cloud 
+     *  \param[in] maximum distance between matched correspondences  
+     */
     void correspondenceEstimation(double max_distance = std::numeric_limits<double>::max ());
 
+    /** \brief Remove outliers and filter input pointcloud  
+     *  \param[in] point cloud to be filtered   
+     */
     void processPointCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in);
 
+    /** \brief Determine the mean/centroid of input and target pointclouds 
+     *  \param[out] output of the normalised input pointcloud
+     *  \param[out] output of the normalised target pointcloud
+     *  \param[out] mean of the input pointcloud
+     *  \param[out] mean of the target pointcloud   
+     */
     void normaliseCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr normalised_src, pcl::PointCloud<pcl::PointXYZ>::Ptr normalised_tgt,
     Eigen::Vector3f mean_src, Eigen::Vector3f mean_tgt);
 
+    /** \brief Determine the transformation matrix ( Rotation + Translation ) 
+     *  \param[in] normalised input pointcloud 
+     *  \param[in] normalised target pointcloud
+     *  \param[in] mean of input pointcloud
+     *  \param[in] mean of target pointcloud 
+     */
     Eigen::Matrix4f SVD(pcl::PointCloud<pcl::PointXYZ>::Ptr normalised_src, pcl::PointCloud<pcl::PointXYZ>::Ptr normalised_tgt, 
     Eigen::Vector3f mean_src, Eigen::Vector3f mean_tgt);
     
+    /** \brief Calculate the MSE of the input pointcloud and the transformed target and determine the convergence 
+     *  \param[in] the transfomation matrix guess   
+     */
     bool checkConvergence(Eigen::Matrix4f trans);
 
     void align(pcl::PointCloud<pcl::PointXYZ>::Ptr final_out);
@@ -224,15 +249,23 @@ void IterativeClosestPoint::normaliseCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr n
         }
     }
 
+    //save the means for later use in SVD
     mean_src = Eigen::Vector3f(centroid_src);
     mean_tgt = Eigen::Vector3f(centroid_tgt);
 
 }
 
+
 Eigen::Matrix4f IterativeClosestPoint::SVD(pcl::PointCloud<pcl::PointXYZ>::Ptr norm_src, pcl::PointCloud<pcl::PointXYZ>::Ptr norm_tgt, Eigen::Vector3f mean_src, Eigen::Vector3f mean_tgt){
 
+    //SVD M matrix
     Eigen::Matrix3f M = Eigen::Matrix3f::Constant(3, 3, 0);
     
+    //************************************
+    //populate the M matrix with sum of product of the matched normalised points
+    //*     M = M + input_matched_point(i)*target_matched_point(i) for all i in matched points, then
+    //*     then use eigen SVD to calculate U and V matrices 
+    //************************************
     for(auto it = corr_.begin(); it != corr_.end(); it++){
 
         Eigen::Vector3f src_p(norm_src->points[it->src_index]), tgt_p(norm_tgt->points[it->tgt_index]); 
@@ -242,11 +275,17 @@ Eigen::Matrix4f IterativeClosestPoint::SVD(pcl::PointCloud<pcl::PointXYZ>::Ptr n
 
     Eigen::JacobiSVD<Eigen::Matrix3f> svd(M, Eigen::ComputeFullU | Eigen::ComputeFullV);
 
+    //************************************
+    //find the rotational and translation matrices 
+    //*    Rotational (R) = U * V.transpose()
+    //*    Translational (T) = mean_input - ( mean_target * R)
+    //************************************
     Eigen::Matrix3f result_rotation = (svd.matrixV()*(svd.matrixU().transpose())).transpose();
     Eigen::Matrix<float, 1, 3>  result_translation = ( mean_src - (mean_tgt * result_rotation) );
     
     Eigen::Matrix4f transformation = Eigen::Matrix4f::Identity();
 
+    //add R and T to a transformation matrix ( which will be used to transform target )
     for(int i = 0; i < 3; i++) 
         transformation(3, i) = result_translation(0, i);
     
@@ -263,13 +302,21 @@ bool IterativeClosestPoint::checkConvergence(Eigen::Matrix4f transformation){
     pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_tgt;
     double mean_sq_error = 0;
 
+    //transform the target point cloud as per the transformation matrix recieved
     pcl::transformPointCloud (*target_, *transformed_tgt, transformation);
 
+    //************************************
+    //calculate the mean squared error of the euclidean distance 
+    //*     mse += ( input_matched_points(i).distance * target_matched_points.distance(i) ) for all matched points i;
+    //*     mse = mse/matched_points.size()
+    //************************************ 
     for(auto it = corr_.begin(); it != corr_.end(); it++)
         mean_sq_error += it->distance_sq;
 
     mean_sq_error /= corr_.size();
 
+    //if the MSE is below some threshold, the pointcloud have been adequately matched
+    //set convered to true and set the final transform
     if( mean_sq_error < 12e-4 ){
 
         converged_ = true;
@@ -278,6 +325,7 @@ bool IterativeClosestPoint::checkConvergence(Eigen::Matrix4f transformation){
     
     }
 
+    //if MSE in above the threshold, set target = transformed_target and return convergence as false
     target_ = transformed_tgt;
     return false;
     
